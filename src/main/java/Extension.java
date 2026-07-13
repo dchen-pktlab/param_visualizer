@@ -10,10 +10,15 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
+import java.awt.event.MouseAdapter;
+import java.awt.event.MouseEvent;
+
 import javax.swing.BoxLayout;
 import javax.swing.JButton;
 import javax.swing.JLabel;
+import javax.swing.JMenuItem;
 import javax.swing.JPanel;
+import javax.swing.JPopupMenu;
 import javax.swing.JScrollPane;
 import javax.swing.JTable;
 import javax.swing.JTextArea;
@@ -33,6 +38,7 @@ public class Extension implements BurpExtension {
     private RequestTable tableModel; 
     private MontoyaApi montoyaApi;
     private JTextField targetUrlField;
+    private Runnable refreshTable = () -> SwingUtilities.invokeLater(tableModel::refresh);
 
     @Override
     public void initialize(MontoyaApi montoyaApi) {
@@ -61,7 +67,13 @@ public class Extension implements BurpExtension {
         targetPanel.add(targetUrlField, BorderLayout.CENTER);
 
         JButton exportButton = new JButton("Collect URL Params");
-        targetPanel.add(exportButton, BorderLayout.EAST);
+        JButton clearButton = new JButton("Clear");
+
+        JPanel buttonPanel = new JPanel();
+        buttonPanel.setLayout(new BoxLayout(buttonPanel, BoxLayout.X_AXIS));
+        buttonPanel.add(exportButton);
+        buttonPanel.add(clearButton);
+        targetPanel.add(buttonPanel, BorderLayout.EAST);
 
         targetPanel.setMaximumSize(new Dimension(Integer.MAX_VALUE, targetPanel.getPreferredSize().height));
         topPanel.add(targetPanel);
@@ -70,6 +82,7 @@ public class Extension implements BurpExtension {
 
         JTable table = new JTable(tableModel);
         table.setAutoCreateRowSorter(true);
+        table.setCellSelectionEnabled(true);
         table.setDefaultRenderer(Object.class, new RequestTableRenderer());
         for (int i = 0; i < table.getColumnCount(); i++) {
             TableColumn column = table.getColumnModel().getColumn(i);
@@ -79,6 +92,47 @@ public class Extension implements BurpExtension {
                 column.setPreferredWidth(400);
             }
         }
+
+        JPopupMenu popupMenu = new JPopupMenu();
+        JMenuItem copyItem = new JMenuItem("Copy");
+        copyItem.addActionListener(e -> {
+            int row = table.getSelectedRow();
+            int col = table.getSelectedColumn();
+            if (row < 0 || col < 0) {
+                return;
+            }
+            Object value = table.getValueAt(row, col);
+            String text = value == null ? "" : value.toString();
+            Toolkit.getDefaultToolkit()
+                    .getSystemClipboard()
+                    .setContents(new StringSelection(text), null);
+        });
+        popupMenu.add(copyItem);
+
+        table.addMouseListener(new MouseAdapter() {
+            @Override
+            public void mousePressed(MouseEvent e) {
+                showPopupIfNeeded(e);
+            }
+
+            @Override
+            public void mouseReleased(MouseEvent e) {
+                showPopupIfNeeded(e);
+            }
+
+            private void showPopupIfNeeded(MouseEvent e) {
+                if (!e.isPopupTrigger()) {
+                    return;
+                }
+                int row = table.rowAtPoint(e.getPoint());
+                int col = table.columnAtPoint(e.getPoint());
+                if (row >= 0 && col >= 0) {
+                    table.setRowSelectionInterval(row, row);
+                    table.setColumnSelectionInterval(col, col);
+                    popupMenu.show(e.getComponent(), e.getX(), e.getY());
+                }
+            }
+        });
 
         JScrollPane scrollPane = new JScrollPane(table);
         panel.add(scrollPane, BorderLayout.CENTER);
@@ -106,6 +160,12 @@ public class Extension implements BurpExtension {
                     .getSystemClipboard()
                     .setContents(new StringSelection(exportText), null);
         });
+        
+        clearButton.addActionListener(e -> {
+            parser.mapped_requests.clear();
+            refreshTable.run();
+            exportField.setText("");
+        });
 
         panel.add(exportScroll, BorderLayout.SOUTH);
 
@@ -114,7 +174,6 @@ public class Extension implements BurpExtension {
 
     private void update_parser() {
         String target_url = targetUrlField.getText().trim();
-        Runnable refreshTable = () -> SwingUtilities.invokeLater(tableModel::refresh);
         Proxy proxy = montoyaApi.proxy();
         List<ProxyHttpRequestResponse> history = proxy.history();
         for (ProxyHttpRequestResponse reqresp : history) {
